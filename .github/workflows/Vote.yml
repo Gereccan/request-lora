@@ -1,0 +1,68 @@
+name: Record vote
+
+on:
+  repository_dispatch:
+    types: [cast_vote]
+
+jobs:
+  vote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    concurrency:
+      group: record-vote
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update votes.json
+        env:
+          MODEL_ID: ${{ github.event.client_payload.model_id }}
+        run: |
+          python3 - <<'EOF'
+          import json
+          from pathlib import Path
+
+          model_id = os.environ.get('MODEL_ID', '').strip()
+          if not model_id:
+              print("❌ Error: No model_id provided")
+              exit(1)
+
+          file_path = Path('votes.json')
+
+          if file_path.exists():
+              with open(file_path, 'r') as f:
+                  votes = json.load(f)
+          else:
+              votes = {}
+
+          votes[model_id] = votes.get(model_id, 0) + 1
+          new_count = votes[model_id]
+
+          with open(file_path, 'w') as f:
+              json.dump(votes, f, indent=2, sort_keys=True)
+
+          print(f"✅ Vote recorded for '{model_id}' → Total: {new_count}")
+          EOF
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add votes.json
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Record vote: ${{ github.event.client_payload.model_id }}"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
