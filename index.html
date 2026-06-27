@@ -684,17 +684,40 @@ async function saveVotesToGitHub(votes, sha) {
 }
 
 // ─── Civitai API ──────────────────────────────────────────────────────────────
+// Fetches all LoRA-family types (LORA, LoCon, DoRA), includes NSFW, paginates all pages
 async function fetchCivitaiLoras(username) {
-  // Civitai public API — no key needed for public models
-  const url = `https://civitai.com/api/v1/models?username=${encodeURIComponent(username)}&types=LORA&limit=100`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('API error');
-    const data = await res.json();
-    return data.items || [];
-  } catch (e) {
-    return null;
+  const LORA_TYPES = ['LORA', 'LoCon', 'DoRA'];
+  let allItems = [];
+
+  for (const type of LORA_TYPES) {
+    let cursor = null;
+    let page = 0;
+    while (true) {
+      page++;
+      let url = `https://civitai.com/api/v1/models?username=${encodeURIComponent(username)}&types=${type}&limit=100&nsfw=true&sort=Newest`;
+      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) break;
+        const data = await res.json();
+        const items = data.items || [];
+        allItems = allItems.concat(items);
+        if (!data.metadata?.nextCursor || items.length === 0) break;
+        cursor = data.metadata.nextCursor;
+        if (page > 20) break; // safety: max 2000 models
+      } catch (e) {
+        break;
+      }
+    }
   }
+
+  // Deduplicate by id
+  const seen = new Set();
+  return allItems.filter(m => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
 }
 
 function extractModelData(item) {
@@ -740,17 +763,19 @@ async function init() {
     votes = getVotes();
   }
 
-  // Try cache for fast render
-  const cached = localStorage.getItem(MODELS_KEY);
-  if (cached) {
-    allModels = JSON.parse(cached);
-    renderGrid(allModels);
-  }
-
-  // Fetch fresh from Civitai
+  // Always fetch fresh — cache can hide newly uploaded models
+  // (cache is only used if fetch fails)
   const raw = await fetchCivitaiLoras(cfg.civitaiUser);
-  if (raw === null) {
-    if (!allModels.length) showError();
+  if (!raw || raw.length === 0) {
+    // Try cache as fallback
+    const cached = localStorage.getItem(MODELS_KEY);
+    if (cached) {
+      allModels = JSON.parse(cached);
+      renderGrid(allModels);
+      toast('Using cached model list — Civitai may be unavailable', true);
+    } else {
+      showError();
+    }
     return;
   }
   allModels = raw.map(extractModelData);
