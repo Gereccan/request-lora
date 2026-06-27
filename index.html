@@ -525,19 +525,12 @@
   </a>
   <div class="header-actions">
     <button class="sort-btn" id="admin-toggle-btn" onclick="toggleAdmin()">Admin</button>
-    <button class="btn" onclick="openConfig()" title="Configure">⚙ Settings</button>
   </div>
 </header>
 
 <main>
 
-  <!-- Setup guide -->
-  <div id="setup-banner">
-    <h3>⚠ Add your GitHub token to save votes</h3>
-    <p>
-      Click <strong>⚙ Settings</strong> and paste a GitHub Personal Access Token with <code>Contents: Read &amp; write</code> on the <code>Gereccan/request-lora</code> repo. Votes will then persist automatically — no backend needed.
-    </p>
-  </div>
+
 
   <!-- Main view -->
   <div id="main-view">
@@ -578,66 +571,18 @@
 <!-- Toast -->
 <div id="toast"></div>
 
-<!-- Config modal -->
-<div id="config-modal">
-  <div class="modal-box">
-    <h2>Settings</h2>
-    <p>Connect your Civitai account and GitHub repo so votes can be saved persistently.</p>
-
-    <div class="field">
-      <label>Civitai username</label>
-      <input type="text" id="cfg-civitai-user" placeholder="e.g. yourname" />
-    </div>
-    <div class="field">
-      <label>GitHub username</label>
-      <input type="text" id="cfg-gh-user" placeholder="e.g. yourname" />
-    </div>
-    <div class="field">
-      <label>GitHub repo name</label>
-      <input type="text" id="cfg-gh-repo" placeholder="e.g. lora-requests (this repo)" />
-    </div>
-    <div class="field">
-      <label>GitHub Personal Access Token <span style="color:var(--text-dim)">(contents: read/write)</span></label>
-      <input type="password" id="cfg-gh-token" placeholder="ghp_…" />
-    </div>
-    <div class="field">
-      <label>Admin password</label>
-      <input type="password" id="cfg-admin-pw" placeholder="Set a password to protect the admin view" />
-    </div>
-
-    <p class="modal-note">
-      Your token is stored only in your browser's localStorage and is never sent anywhere except GitHub's API.
-      Create a token at <a href="https://github.com/settings/tokens/new" target="_blank">github.com/settings/tokens</a> — only needs "Contents: Read and write" on this repo.
-    </p>
-
-    <div class="modal-actions">
-      <button class="sort-btn" onclick="closeConfig()">Cancel</button>
-      <button class="btn-primary" onclick="saveConfig()">Save settings</button>
-    </div>
-  </div>
-</div>
 
 <script>
-// ─── Config ───────────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'lora_req_cfg';
-const VOTES_KEY   = 'lora_votes_local';
-const VOTED_KEY   = 'lora_voted_ids';
-const MODELS_KEY  = 'lora_models_cache';
+// ─── Constants ────────────────────────────────────────────────────────────────
+const GH_USER    = 'Gereccan';
+const GH_REPO    = 'request-lora';
+const CI_USER    = 'Gereccan';
+const VOTES_KEY  = 'lora_votes_local';
+const VOTED_KEY  = 'lora_voted_ids';
+const MODELS_KEY = 'lora_models_cache';
+const ADMIN_PW   = 'admin'; // change this to whatever you want
 
-// Baked-in defaults — token must still be added via ⚙ Settings
-const DEFAULTS = {
-  civitaiUser: 'Gereccan',
-  ghUser:      'Gereccan',
-  ghRepo:      'request-lora'
-};
-
-function getCfg() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    return { ...DEFAULTS, ...stored };
-  } catch { return { ...DEFAULTS }; }
-}
-function saveCfg(c) { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); }
+// ─── Local helpers ────────────────────────────────────────────────────────────
 function getVotes() {
   try { return JSON.parse(localStorage.getItem(VOTES_KEY) || '{}'); } catch { return {}; }
 }
@@ -647,48 +592,41 @@ function getVotedIds() {
 }
 function setVotedIds(a) { localStorage.setItem(VOTED_KEY, JSON.stringify(a)); }
 
-// ─── GitHub persistence ───────────────────────────────────────────────────────
-const GH_FILE = 'votes.json';
-
-async function ghApi(method, path, body) {
-  const cfg = getCfg();
-  if (!cfg.ghToken || !cfg.ghUser || !cfg.ghRepo) return null;
-  const url = `https://api.github.com/repos/${cfg.ghUser}/${cfg.ghRepo}/contents/${path}`;
-  const headers = {
-    'Authorization': `Bearer ${cfg.ghToken}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/vnd.github+json'
-  };
-  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  if (!res.ok) return null;
-  return res.json();
-}
-
+// ─── Read votes.json publicly (no token needed) ───────────────────────────────
 async function loadVotesFromGitHub() {
-  const data = await ghApi('GET', GH_FILE);
-  if (!data) return null;
   try {
-    const decoded = atob(data.content.replace(/\n/g, ''));
-    return { votes: JSON.parse(decoded), sha: data.sha };
+    // Use raw.githubusercontent.com — fully public, no auth
+    const url = `https://raw.githubusercontent.com/${GH_USER}/${GH_REPO}/main/votes.json?t=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
   } catch { return null; }
 }
 
-async function saveVotesToGitHub(votes, sha) {
-  const content = btoa(JSON.stringify(votes, null, 2));
-  const body = {
-    message: 'Update vote counts',
-    content,
-    ...(sha ? { sha } : {})
-  };
-  return ghApi('PUT', GH_FILE, body);
+// ─── Write vote via repository_dispatch (token stays in GitHub secret) ────────
+async function dispatchVote(modelId) {
+  const url = `https://api.github.com/repos/${GH_USER}/${GH_REPO}/dispatches`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github+json'
+      },
+      body: JSON.stringify({
+        event_type: 'cast_vote',
+        client_payload: { model_id: modelId }
+      })
+    });
+    // 204 = success, 401/404 = workflow not set up yet
+    return res.status === 204;
+  } catch { return false; }
 }
 
 // ─── Civitai API ──────────────────────────────────────────────────────────────
-// Fetches all LoRA-family types (LORA, LoCon, DoRA), includes NSFW, paginates all pages
 async function fetchCivitaiLoras(username) {
   const LORA_TYPES = ['LORA', 'LoCon', 'DoRA'];
   let allItems = [];
-
   for (const type of LORA_TYPES) {
     let cursor = null;
     let page = 0;
@@ -704,14 +642,10 @@ async function fetchCivitaiLoras(username) {
         allItems = allItems.concat(items);
         if (!data.metadata?.nextCursor || items.length === 0) break;
         cursor = data.metadata.nextCursor;
-        if (page > 20) break; // safety: max 2000 models
-      } catch (e) {
-        break;
-      }
+        if (page > 20) break;
+      } catch (e) { break; }
     }
   }
-
-  // Deduplicate by id
   const seen = new Set();
   return allItems.filter(m => {
     if (seen.has(m.id)) return false;
@@ -721,8 +655,8 @@ async function fetchCivitaiLoras(username) {
 }
 
 function extractModelData(item) {
-  const version = item.modelVersions?.[0] || {};
-  const image   = version.images?.[0]?.url || null;
+  const version  = item.modelVersions?.[0] || {};
+  const image    = version.images?.[0]?.url || null;
   const baseModel = version.baseModel || 'Unknown';
   return {
     id: String(item.id),
@@ -740,34 +674,26 @@ function extractModelData(item) {
 // ─── State ────────────────────────────────────────────────────────────────────
 let allModels  = [];
 let votes      = {};
-let votesSha   = null;
 let sortMode   = 'popular';
 let searchTerm = '';
 let adminMode  = false;
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
-  const cfg = getCfg();
-  if (!cfg.ghToken) {
-    document.getElementById('setup-banner').classList.add('visible');
-  }
-  renderGrid(null); // loading
+  renderGrid(null);
 
-  // Load votes from GitHub (or fall back to local)
-  const ghResult = await loadVotesFromGitHub();
-  if (ghResult) {
-    votes   = ghResult.votes;
-    votesSha = ghResult.sha;
+  // Load votes from public raw file
+  const ghVotes = await loadVotesFromGitHub();
+  if (ghVotes) {
+    votes = ghVotes;
     saveVotesLocal(votes);
   } else {
     votes = getVotes();
   }
 
-  // Always fetch fresh — cache can hide newly uploaded models
-  // (cache is only used if fetch fails)
-  const raw = await fetchCivitaiLoras(cfg.civitaiUser);
+  // Fetch models from Civitai
+  const raw = await fetchCivitaiLoras(CI_USER);
   if (!raw || raw.length === 0) {
-    // Try cache as fallback
     const cached = localStorage.getItem(MODELS_KEY);
     if (cached) {
       allModels = JSON.parse(cached);
@@ -806,7 +732,7 @@ function renderGrid(models) {
     return;
   }
   if (!models.length) {
-    grid.innerHTML = `<div class="state-msg"><div class="icon">🔍</div><p>No models found. Check your Civitai username in ⚙ Settings.</p></div>`;
+    grid.innerHTML = `<div class="state-msg"><div class="icon">🔍</div><p>No models found.</p></div>`;
     return;
   }
   const votedIds = getVotedIds();
@@ -862,7 +788,7 @@ function showError() {
   document.getElementById('lora-grid').innerHTML = `
     <div class="state-msg">
       <div class="icon">⚠</div>
-      <p>Couldn't load models from Civitai. Check that <strong>Gereccan</strong> has public LoRAs, or try again later.</p>
+      <p>Couldn't load models from Civitai. Try again later.</p>
     </div>`;
 }
 
@@ -871,7 +797,7 @@ async function vote(id) {
   const votedIds = getVotedIds();
   if (votedIds.includes(id)) return;
 
-  // Optimistic UI
+  // Optimistic UI update
   votedIds.push(id);
   setVotedIds(votedIds);
   votes[id] = (votes[id] || 0) + 1;
@@ -881,36 +807,22 @@ async function vote(id) {
   if (card) {
     card.classList.add('voted');
     const btn = card.querySelector('.vote-btn');
-    const pill = document.getElementById(`vcount-${id}`);
     btn.classList.add('voted-state');
     btn.disabled = true;
     btn.innerHTML = `✓ Requested <span class="vote-count-pill" id="vcount-${id}">${votes[id]}</span>`;
   }
-
-  // Re-sort if in popular mode
   if (sortMode === 'popular') renderGrid(allModels);
 
-  // Persist to GitHub
-  toast('Vote recorded!');
-  const ghResult = await loadVotesFromGitHub();
-  let currentVotes = votes;
-  let sha = votesSha;
-  if (ghResult) {
-    currentVotes = ghResult.votes;
-    sha = ghResult.sha;
-    currentVotes[id] = (currentVotes[id] || 0) + 1;
-    votes = currentVotes;
-    saveVotesLocal(votes);
-  }
-  const saved = await saveVotesToGitHub(currentVotes, sha);
-  if (saved) {
-    votesSha = saved.content?.sha || sha;
+  // Trigger GitHub Actions workflow — token stays safely in GitHub secret
+  const ok = await dispatchVote(id);
+  if (ok) {
+    toast('Vote recorded!');
   } else {
-    toast('Saved locally — configure GitHub to persist votes.', true);
+    toast('Vote saved locally — workflow may not be set up yet.', true);
   }
 }
 
-// ─── Filter / Sort ───────────────────────────────────────────────────────────
+// ─── Filter / Sort ────────────────────────────────────────────────────────────
 function filterCards() {
   searchTerm = document.getElementById('search-input').value;
   renderGrid(allModels);
@@ -926,11 +838,8 @@ function setSortMode(mode) {
 // ─── Admin ────────────────────────────────────────────────────────────────────
 function toggleAdmin() {
   if (adminMode) { showMain(); return; }
-  const cfg = getCfg();
-  if (cfg.adminPw) {
-    const pw = prompt('Admin password:');
-    if (pw !== cfg.adminPw) { toast('Incorrect password', true); return; }
-  }
+  const pw = prompt('Admin password:');
+  if (pw !== ADMIN_PW) { toast('Incorrect password', true); return; }
   showAdmin();
 }
 
@@ -993,35 +902,10 @@ function exportCSV() {
   URL.revokeObjectURL(url);
 }
 
-// ─── Config modal ─────────────────────────────────────────────────────────────
-function openConfig() {
-  const cfg = getCfg();
-  document.getElementById('cfg-civitai-user').value = cfg.civitaiUser || 'Gereccan';
-  document.getElementById('cfg-gh-user').value      = cfg.ghUser || 'Gereccan';
-  document.getElementById('cfg-gh-repo').value      = cfg.ghRepo || 'request-lora';
-  document.getElementById('cfg-gh-token').value     = cfg.ghToken || '';
-  document.getElementById('cfg-admin-pw').value     = cfg.adminPw || '';
-  document.getElementById('config-modal').classList.add('open');
-}
-function closeConfig() { document.getElementById('config-modal').classList.remove('open'); }
-function saveConfig() {
-  const cfg = {
-    civitaiUser: document.getElementById('cfg-civitai-user').value.trim(),
-    ghUser:      document.getElementById('cfg-gh-user').value.trim(),
-    ghRepo:      document.getElementById('cfg-gh-repo').value.trim(),
-    ghToken:     document.getElementById('cfg-gh-token').value.trim(),
-    adminPw:     document.getElementById('cfg-admin-pw').value
-  };
-  saveCfg(cfg);
-  closeConfig();
-  document.getElementById('setup-banner').classList.remove('visible');
-  allModels = [];
-  localStorage.removeItem(MODELS_KEY);
-  init();
-  toast('Settings saved!');
-}
+// ─── Utils ───────────────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n); }
 
-// ─── Toast ────────────────────────────────────────────────────────────────────
 let toastTimer;
 function toast(msg, isError = false) {
   const el = document.getElementById('toast');
@@ -1030,15 +914,6 @@ function toast(msg, isError = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = ''; }, 3000);
 }
-
-// ─── Utils ───────────────────────────────────────────────────────────────────
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'k' : String(n); }
-
-// Close modal on backdrop click
-document.getElementById('config-modal').addEventListener('click', e => {
-  if (e.target === e.currentTarget) closeConfig();
-});
 
 init();
 </script>
