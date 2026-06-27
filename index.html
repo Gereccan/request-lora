@@ -533,10 +533,9 @@
 
   <!-- Setup guide -->
   <div id="setup-banner">
-    <h3>⚠ Setup required</h3>
+    <h3>⚠ Add your GitHub token to save votes</h3>
     <p>
-      Click <strong>⚙ Settings</strong> to enter your GitHub repo details and Civitai username.
-      Votes will be saved to <code>votes.json</code> in your GitHub repo — no backend needed.
+      Click <strong>⚙ Settings</strong> and paste a GitHub Personal Access Token with <code>Contents: Read &amp; write</code> on the <code>Gereccan/request-lora</code> repo. Votes will then persist automatically — no backend needed.
     </p>
   </div>
 
@@ -625,8 +624,18 @@ const VOTES_KEY   = 'lora_votes_local';
 const VOTED_KEY   = 'lora_voted_ids';
 const MODELS_KEY  = 'lora_models_cache';
 
+// Baked-in defaults — token must still be added via ⚙ Settings
+const DEFAULTS = {
+  civitaiUser: 'Gereccan',
+  ghUser:      'Gereccan',
+  ghRepo:      'request-lora'
+};
+
 function getCfg() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; }
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    return { ...DEFAULTS, ...stored };
+  } catch { return { ...DEFAULTS }; }
 }
 function saveCfg(c) { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); }
 function getVotes() {
@@ -716,10 +725,8 @@ let adminMode  = false;
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 async function init() {
   const cfg = getCfg();
-  if (!cfg.civitaiUser) {
+  if (!cfg.ghToken) {
     document.getElementById('setup-banner').classList.add('visible');
-    renderGrid([]);
-    return;
   }
   renderGrid(null); // loading
 
@@ -830,7 +837,7 @@ function showError() {
   document.getElementById('lora-grid').innerHTML = `
     <div class="state-msg">
       <div class="icon">⚠</div>
-      <p>Couldn't load models. Check your Civitai username or try again later.</p>
+      <p>Couldn't load models from Civitai. Check that <strong>Gereccan</strong> has public LoRAs, or try again later.</p>
     </div>`;
 }
 
@@ -964,9 +971,9 @@ function exportCSV() {
 // ─── Config modal ─────────────────────────────────────────────────────────────
 function openConfig() {
   const cfg = getCfg();
-  document.getElementById('cfg-civitai-user').value = cfg.civitaiUser || '';
-  document.getElementById('cfg-gh-user').value      = cfg.ghUser || '';
-  document.getElementById('cfg-gh-repo').value      = cfg.ghRepo || '';
+  document.getElementById('cfg-civitai-user').value = cfg.civitaiUser || 'Gereccan';
+  document.getElementById('cfg-gh-user').value      = cfg.ghUser || 'Gereccan';
+  document.getElementById('cfg-gh-repo').value      = cfg.ghRepo || 'request-lora';
   document.getElementById('cfg-gh-token').value     = cfg.ghToken || '';
   document.getElementById('cfg-admin-pw').value     = cfg.adminPw || '';
   document.getElementById('config-modal').classList.add('open');
