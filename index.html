@@ -694,7 +694,7 @@ async function fetchCivitaiLoras(username) {
     let page = 0;
     while (true) {
       page++;
-      let url = `https://civitai.com/api/v1/models?username=${encodeURIComponent(username)}&types=${type}&limit=100&nsfw=true&sort=Newest`;
+      let url = `https://civitai.red/api/v1/models?username=${encodeURIComponent(username)}&types=${type}&limit=100&nsfw=true&sort=Newest`;
       if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
       try {
         const res = await fetch(url);
@@ -732,7 +732,7 @@ function extractModelData(item) {
     downloadCount: item.stats?.downloadCount || 0,
     favoriteCount: item.stats?.favoriteCount || 0,
     createdAt: item.createdAt || '',
-    civitaiUrl: `https://civitai.com/models/${item.id}`,
+    civitaiUrl: `https://civitai.red/models/${item.id}`,
     nsfw: item.nsfw || false
   };
 }
